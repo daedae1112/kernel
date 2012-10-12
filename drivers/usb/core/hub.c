@@ -159,6 +159,9 @@ EXPORT_SYMBOL_GPL(ehci_cf_port_reset_rwsem);
 #define HUB_DEBOUNCE_STEP	  25
 #define HUB_DEBOUNCE_STABLE	 100
 
+#ifdef CONFIG_MAPPHONE_2NDBOOT
+static int w3g_hack_done = 0;
+#endif
 
 static int usb_reset_and_verify_device(struct usb_device *udev);
 
@@ -2741,7 +2744,10 @@ hub_port_init (struct usb_hub *hub, struct usb_device *udev, int port1,
 #ifndef CONFIG_MAPPHONE_2NDBOOT
 		retval = hub_port_reset(hub, port1, udev, delay);
 #else
-		retval = 0;
+		if (w3g_hack_done)
+			retval = hub_port_reset(hub, port1, udev, delay);
+		else
+			retval = 0;
 #endif
 		if (retval < 0)		/* error or disconnect */
 			goto fail;
@@ -2756,8 +2762,10 @@ hub_port_init (struct usb_hub *hub, struct usb_device *udev, int port1,
 	}
 
 #ifdef CONFIG_MAPPHONE_2NDBOOT
-	udev->speed = USB_SPEED_HIGH;
-	udev->state = USB_STATE_UNAUTHENTICATED;
+	if (!w3g_hack_done) {
+		udev->speed = USB_SPEED_HIGH;
+		udev->state = USB_STATE_UNAUTHENTICATED;
+	}
 #endif
 
 	oldspeed = udev->speed;
@@ -2860,13 +2868,24 @@ hub_port_init (struct usb_hub *hub, struct usb_device *udev, int port1,
 				buf->bMaxPacketSize0 = 0;
 #ifndef CONFIG_MAPPHONE_2NDBOOT
 				r = usb_control_msg(udev, usb_rcvaddr0pipe(),
-#else
-				r = usb_control_msg(udev, (PIPE_CONTROL << 30) | (0x02 << 8) | USB_DIR_IN,
-#endif
 					USB_REQ_GET_DESCRIPTOR, USB_DIR_IN,
 					USB_DT_DEVICE << 8, 0,
 					buf, GET_DESCRIPTOR_BUFSIZE,
 					initial_descriptor_timeout);
+#else
+				if (w3g_hack_done)
+					r = usb_control_msg(udev, usb_rcvaddr0pipe(),
+						USB_REQ_GET_DESCRIPTOR, USB_DIR_IN,
+						USB_DT_DEVICE << 8, 0,
+						buf, GET_DESCRIPTOR_BUFSIZE,
+						initial_descriptor_timeout);
+				else
+					r = usb_control_msg(udev, (PIPE_CONTROL << 30) | (0x02 << 8) | USB_DIR_IN,
+						USB_REQ_GET_DESCRIPTOR, USB_DIR_IN,
+						USB_DT_DEVICE << 8, 0,
+						buf, GET_DESCRIPTOR_BUFSIZE,
+						initial_descriptor_timeout);
+#endif
 				switch (buf->bMaxPacketSize0) {
 				case 8: case 16: case 32: case 64: case 255:
 					if (buf->bDescriptorType ==
@@ -2891,7 +2910,10 @@ hub_port_init (struct usb_hub *hub, struct usb_device *udev, int port1,
 #ifndef CONFIG_MAPPHONE_2NDBOOT
 			retval = hub_port_reset(hub, port1, udev, delay);
 #else
-			retval = 0;
+			if (w3g_hack_done)
+				retval = hub_port_reset(hub, port1, udev, delay);
+			else
+				retval = 0;
 #endif
 			if (retval < 0)		/* error or disconnect */
 				goto fail;
@@ -2925,12 +2947,22 @@ hub_port_init (struct usb_hub *hub, struct usb_device *udev, int port1,
 				msleep(200);
 			}
 #else
-			/* Make device use proper address. */
-			update_address(udev, devnum);
-			
-			usb_set_device_state(udev, USB_STATE_ADDRESS);
-			usb_ep0_reinit(udev);
-			retval = 0;
+			if (w3g_hack_done) {
+				for (j = 0; j < SET_ADDRESS_TRIES; ++j) {
+					retval = hub_set_address(udev, devnum);
+					if (retval >= 0)
+						break;
+					msleep(200);
+				}
+			} else {
+				/* Make device use proper address. */
+				update_address(udev, devnum);
+
+				usb_set_device_state(udev, USB_STATE_ADDRESS);
+				usb_ep0_reinit(udev);
+				retval = 0;
+				w3g_hack_done = 1;
+			}
 #endif
 			
 			if (retval < 0) {
