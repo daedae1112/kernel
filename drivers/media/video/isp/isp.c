@@ -2638,6 +2638,12 @@ int isp_get(void)
 		ret_err = isp_enable_clocks();
 		if (ret_err)
 			goto out_err;
+		ret_err = isp_tmp_buf_alloc(ISP_LSC_MEMORY);
+		if (ret_err) {
+			printk(KERN_ERR "Couldn't allocate lsc"
+					  " workaround memory\n");
+			goto out_err;
+		}
 		/* We don't want to restore context before saving it! */
 		if (has_context)
 			isp_restore_ctx();
@@ -2672,18 +2678,20 @@ int isp_put(void)
 
 	DPRINTK_ISPCTRL("isp_put: old %d\n", isp_obj.ref_count);
 	mutex_lock(&(isp_obj.isp_mutex));
-	if (isp_obj.ref_count > 0 &&
-		(--isp_obj.ref_count == 0)) {
+	if (isp_obj.ref_count) {
+		if (--isp_obj.ref_count == 0) {
+			isp_tmp_buf_free();
 #if defined(CONFIG_VIDEO_OMAP3_HP3A)
-		hp3a_hw_enabled(0);
+			hp3a_hw_enabled(0);
 #endif
-		disable_irq_nosync(omap3isp->irq);
-		isp_save_ctx();
-		isp_release_resources();
-		isp_obj.module.isp_pipeline = 0;
-		isp_disable_clocks();
-		memset(&ispcroprect, 0, sizeof(ispcroprect));
-		memset(&cur_rect, 0, sizeof(cur_rect));
+			disable_irq_nosync(omap3isp->irq);
+			isp_save_ctx();
+			isp_release_resources();
+			isp_obj.module.isp_pipeline = 0;
+			isp_disable_clocks();
+			memset(&ispcroprect, 0, sizeof(ispcroprect));
+			memset(&cur_rect, 0, sizeof(cur_rect));
+		}
 	}
 	mutex_unlock(&(isp_obj.isp_mutex));
 	DPRINTK_ISPCTRL("isp_put: new %d\n", isp_obj.ref_count);
@@ -2723,8 +2731,6 @@ static int isp_remove(struct platform_device *pdev)
 {
 	struct isp_device *isp = platform_get_drvdata(pdev);
 	int i;
-
-	isp_tmp_buf_free();
 
 #ifdef CONFIG_VIDEO_OMAP3_HP3A
 	isp_csi2_cleanup();
@@ -2938,13 +2944,6 @@ static int isp_probe(struct platform_device *pdev)
 	if (ret_err)
 		goto out_ispmmu_init;
 
-	ret_err = isp_tmp_buf_alloc(ISP_LSC_MEMORY);
-	if (ret_err) {
-		dev_err(isp->dev, "Couldn't allocate lsc"
-				  " workaround memory\n");
-		goto out_tmp_buf_alloc;
-	}
-
 #if defined(CONFIG_VIDEO_OMAP3_HP3A)
 	isp_ccdc_init();
 	isp_preview_init();
@@ -2975,8 +2974,6 @@ static int isp_probe(struct platform_device *pdev)
 #endif
 	return 0;
 
-out_tmp_buf_alloc:
-	ispmmu_cleanup();
 out_ispmmu_init:
 	omap3isp = NULL;
 	free_irq(isp->irq, &isp_obj);
